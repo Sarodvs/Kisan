@@ -1,0 +1,10 @@
+{
+  "description": "Empowers smallholder farmers and rural workers with a visual, voice-enabled platform for booking equipment, finding labor, managing resources, and accessing community support.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
