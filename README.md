@@ -23,3 +23,12 @@ API / Connecting Layer: Supabase JavaScript Client (@supabase/supabase-js)
 AI Assistance: Gemini API (Scheme eligibility matching and voice parsing)
 
 Deployment: Vercel
+
+## Local setup
+
+1. Copy `.env.example` to `.env.local` and set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from the Supabase project settings.
+2. Apply the SQL migrations in `supabase/migrations` to the project.
+3. In Supabase Dashboard, enable **Authentication > Providers > Phone** and configure an SMS provider. The app sends Indian numbers as `+91XXXXXXXXXX`.
+4. Run `npm install` and `npm run dev`.
+
+The onboarding flow currently uses temporary development verification: any six-digit code is accepted, and Supabase Anonymous Auth creates the backend session. New users are created with role and name metadata, the database trigger creates their profile, and the signup then stores their address, phone, and onboarding answers in `profiles`. Re-enable real phone OTP before production.

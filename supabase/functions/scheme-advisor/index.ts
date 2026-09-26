@@ -1,5 +1,13 @@
+// @ts-ignore Remote Deno imports are resolved by the Supabase Edge Function runtime.
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// @ts-ignore Remote Deno imports are resolved by the Supabase Edge Function runtime.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+declare const Deno: {
+  env: {
+    get(name: string): string | undefined;
+  };
+};
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -19,7 +27,7 @@ interface RequestBody {
 
 const VALID_ROLES = ["farmer", "tool_lender", "job_seeker", "storage_owner"];
 
-serve(async (req) => {
+serve(async (req: Request) => {
   // 1. Handle CORS preflight request
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });

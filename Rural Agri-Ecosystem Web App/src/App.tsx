@@ -1,4 +1,26 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { isSupabaseConfigured, supabase } from "../../src/lib/supabase";
+import type { Json } from "../../src/types/database.generated";
+
+type WeatherState = { temperature: number; description: string; location: string; advice: string } | null;
+
+async function fetchWeatherForPincode(pincode: string): Promise<WeatherState> {
+  if (!pincode) return null;
+  const postalResponse = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(pincode)}`);
+  const postalData = await postalResponse.json();
+  const postal = postalData?.[0]?.PostOffice?.[0];
+  if (!postal) return null;
+  const search = encodeURIComponent(`${postal.District}, ${postal.State}`);
+  const locationResponse = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${search}&count=1&language=en&format=json`);
+  const locationData = await locationResponse.json();
+  const location = locationData?.results?.[0];
+  if (!location) return null;
+  const weatherResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,weather_code&timezone=auto`);
+  const weatherData = await weatherResponse.json();
+  const code = weatherData?.current?.weather_code;
+  const descriptions: Record<number, string> = { 0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Foggy", 51: "Light drizzle", 61: "Light rain", 63: "Rain", 65: "Heavy rain", 80: "Rain showers", 95: "Thunderstorm" };
+  return { temperature: Math.round(weatherData.current.temperature_2m), description: descriptions[code] || "Current conditions", location: `${postal.District}, ${postal.State}`, advice: code >= 51 ? "Plan field work around the rain" : "Good conditions for outdoor work" };
+}
 
 type IconName =
   | "home"
@@ -81,6 +103,7 @@ const translations: Record<LanguageCode, Record<string, string>> = {
 };
 
 function text(language: LanguageCode, key: string) {
+  if (key === "workers") return ({ en: "Workers", hi: "श्रमिक", mr: "मजूर", bn: "শ্রমিক", te: "కార్మికులు", ta: "தொழிலாளர்கள்", gu: "મજૂરો", kn: "ಕಾರ್ಮಿಕರು", ml: "തൊഴിലാളികൾ", pa: "ਮਜ਼ਦੂਰ", or: "ଶ୍ରମିକ", as: "শ্ৰমিক" } as Record<LanguageCode, string>)[language];
   return translations[language][key] || translations.en[key] || key;
 }
 
@@ -137,6 +160,7 @@ type OnboardingProfile = {
   role: UserRole;
   answers: Record<number, string[]>;
   account?: SignupForm;
+  userId?: string;
 };
 
 type SignupForm = {
@@ -150,10 +174,39 @@ type SignupForm = {
   phone: string;
 };
 
+const roleValues: Record<UserRole, string> = {
+  Farmer: "farmer",
+  "Tool Lender": "tool_lender",
+  "Job Seeker": "job_seeker",
+  "Storage Owner": "storage_owner",
+};
+
+const displayRoles: Record<string, UserRole> = {
+  farmer: "Farmer",
+  tool_lender: "Tool Lender",
+  job_seeker: "Job Seeker",
+  storage_owner: "Storage Owner",
+};
+
+function toAuthPhone(phone: string) {
+  return `+91${phone}`;
+}
+
 function Dashboard({ notify, go, profile, language }: { notify: (message: string) => void; go: (page: string) => void; profile: OnboardingProfile; language: LanguageCode }) {
+  const [weather, setWeather] = useState<WeatherState>(null);
+  const [bookings, setBookings] = useState<any[]>([]);
+  useEffect(() => {
+    let mounted = true;
+    void fetchWeatherForPincode(profile.account?.pincode || "").then(result => { if (mounted) setWeather(result); }).catch(() => { if (mounted) setWeather(null); });
+    if (isSupabaseConfigured && profile.userId) {
+      void supabase.from("service_requests").select("*").eq("requester_id", profile.userId).order("created_at", { ascending: false }).then(({ data }) => { if (mounted) setBookings(data || []); });
+    }
+    return () => { mounted = false; };
+  }, [profile.account?.pincode, profile.userId]);
+  const firstName = profile.account?.firstName || "Farmer";
   const quick = [
     { label: "Book Tractor", icon: "tractor" as IconName, color: "green", page: "market" },
-    { label: "Find Labor", icon: "users" as IconName, color: "gold", page: "jobs" },
+    { label: "Find Labor", icon: "users" as IconName, color: "gold", page: profile.role === "Farmer" ? "workers" : "jobs" },
     { label: "Find Storage", icon: "warehouse" as IconName, color: "blue", page: "market" },
     ...(profile.role === "Farmer" ? [{ label: "Government schemes", icon: "shield" as IconName, color: "purple", page: "schemes" }] : []),
   ];
@@ -161,15 +214,14 @@ function Dashboard({ notify, go, profile, language }: { notify: (message: string
     <section className="hero">
       <div className="hero-copy">
         <div className="eyebrow">GOOD MORNING</div>
-        <h1>Namaste, Ramesh!</h1>
-        <p>Your wheat farm is looking healthy today.</p>
+        <h1>Namaste, {firstName}!</h1>
+        <p>{profile.account?.city && profile.account.state ? `${profile.account.city}, ${profile.account.state}` : "Your farm area"} is ready for your next farm task.</p>
       </div>
       <img src={photos.farmer} alt="Farmer standing in a green field" />
     </section>
 
     <section className="weather-card">
-      <div className="weather-main"><div className="sun-icon"><Icon name="sun" size={34} /></div><div><strong>29°</strong><span>Sunny</span></div></div>
-      <div className="weather-place"><Icon name="map" size={18} /><span>Nashik, Maharashtra<br /><b>Good day for sowing</b></span></div>
+      {weather ? <><div className="weather-main"><div className="sun-icon"><Icon name="sun" size={34} /></div><div><strong>{weather.temperature}°</strong><span>{weather.description}</span></div></div><div className="weather-place"><Icon name="map" size={18} /><span>{weather.location}<br /><b>{weather.advice}</b></span></div></> : <div className="weather-unavailable"><Icon name="cloud" size={25} /><span>Add a valid pincode to see local weather.</span></div>}
       <SpeakButton label="today's weather" />
     </section>
 
@@ -181,64 +233,59 @@ function Dashboard({ notify, go, profile, language }: { notify: (message: string
       </button>)}
     </div>
 
-    <SectionTitle action="View all" onAction={() => go("requests")}>Active requests</SectionTitle>
-    <section className="request-card">
-      <div className="request-top">
-        <span className="request-image"><Icon name="tractor" size={30} /></span>
-        <div><span className="status pending">Awaiting response</span><h3>Mahindra 575 Tractor</h3><p><Icon name="calendar" size={16} /> Tomorrow, 8:00 AM</p></div>
-        <SpeakButton label="tractor request" />
-      </div>
-      <div className="progress"><i /><i /><i /><i /></div>
-      <div className="progress-labels"><b>Requested</b><span>Accepted</span><span>On the way</span><span>Done</span></div>
-    </section>
-
-    <SectionTitle action="Open forum" onAction={() => notify("The village forum will be available soon")}>Village voices</SectionTitle>
-    <section className="voice-card">
-      <img src={photos.workers} alt="Farmers working together in a rice field" />
-      <div><span className="status live">Community tip</span><h3>Best time to water wheat?</h3><p>Shared by Sunita • 2 km away</p>
-        <button className="play-button" onClick={() => notify("Playing Sunita's voice message")}><span>▶</span><span className="wave">▮▮▮▮▮▮</span><b>0:38</b></button>
-      </div>
-    </section>
+    <SectionTitle>Booked services</SectionTitle>
+    {bookings.length === 0 ? <p className="empty-state">You have no booked services yet.</p> : bookings.map(booking => <section className="request-card" key={booking.id}><div className="request-top"><span className="request-image"><Icon name={booking.item_type === "storage" ? "warehouse" : "tractor"} size={30} /></span><div><span className={`status ${booking.status === "confirmed" ? "live" : "pending"}`}>{booking.status}</span><h3>{booking.item_type === "storage" ? "Storage booking" : "Equipment booking"}</h3><p><Icon name="calendar" size={16} /> {booking.start_date || "Date pending"}</p></div></div></section>)}
   </main>;
 }
 
-const governmentSchemes = [
-  { name: "PM-KISAN", summary: "Income support for eligible landholding farmer families.", icon: "leaf" as IconName, match: () => true, questions: ["Do you have land records in your name?", "Is your family income within the scheme limits?"] },
-  { name: "Pradhan Mantri Fasal Bima Yojana", summary: "Crop insurance support for seasonal crop losses.", icon: "shield" as IconName, match: (answers: string[]) => answers.some(answer => ["Wheat", "Rice", "Vegetables"].includes(answer)), questions: ["Do you want to insure your current crop?", "Do you have a crop loan or bank account?"] },
-  { name: "Kisan Credit Card", summary: "Flexible credit for crop inputs and farm expenses.", icon: "briefcase" as IconName, match: (answers: string[]) => answers.some(answer => answer.includes("acres") || answer === "Farm equipment"), questions: ["Do you have an active bank account?", "Do you need credit for seeds, tools, or inputs?"] },
-  { name: "Per Drop More Crop", summary: "Support for efficient irrigation and water-saving systems.", icon: "cloud" as IconName, match: (answers: string[]) => answers.includes("Vegetables") || answers.includes("Crop storage"), questions: ["Do you have access to a water source?", "Would drip or sprinkler irrigation help your farm?"] },
-];
-
 function GovernmentSchemes({ profile, notify, language }: { profile: OnboardingProfile; notify: (message: string) => void; language: LanguageCode }) {
-  const [activeScheme, setActiveScheme] = useState<typeof governmentSchemes[number] | null>(null);
+  const [schemes, setSchemes] = useState<any[]>([]);
+  const [activeScheme, setActiveScheme] = useState<any | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const profileAnswers = Object.values(profile.answers).flat();
-  const suggestions = governmentSchemes.filter(scheme => scheme.match(profileAnswers));
+  const [advisorResult, setAdvisorResult] = useState("");
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (!isSupabaseConfigured) { setLoading(false); return; }
+    void supabase.from("government_schemes").select("*").order("created_at", { ascending: false }).then(({ data, error }) => {
+      if (error) notify("Government schemes could not be loaded");
+      setSchemes(data || []);
+      setLoading(false);
+    });
+  }, [notify]);
+  const questions = activeScheme ? Object.entries(activeScheme.eligibility_criteria || {}).filter(([key]) => key !== "roles").slice(0, 5).map(([key]) => `What is your ${key.replace(/_/g, " ")}?`) : [];
   const answerScheme = (question: string, value: string) => setAnswers(current => ({ ...current, [question]: value }));
-  const submitApplication = () => {
-    if (!activeScheme || activeScheme.questions.some(question => !answers[question])) return;
-    notify(`Your ${activeScheme.name} eligibility answers are saved`);
-    setActiveScheme(null);
+  const submitApplication = async () => {
+    if (!activeScheme || questions.some(question => !answers[question])) return;
+    if (!isSupabaseConfigured) { notify("Connect Supabase and Gemini to check eligibility"); return; }
+    setAdvisorResult("Checking the official eligibility criteria...");
+    const { data, error } = await supabase.functions.invoke("scheme-advisor", { body: { profile: { role: "farmer", crops: Object.values(profile.answers).flat(), location: { district: profile.account?.city, state: profile.account?.state }, language }, query: `Check whether I can apply for ${activeScheme.title}. My answers are ${JSON.stringify(answers)}.` } });
+    if (error) { setAdvisorResult("Eligibility could not be checked right now."); return; }
+    setAdvisorResult(data?.advice || data?.eligibility_match || "Review the official scheme criteria before applying.");
   };
 
   return <main className="page-content">
     <div className="page-heading"><div><span className="eyebrow">{text(language, "welcome")}</span><h1>{text(language, "schemes")}</h1><p>{text(language, "schemesHint")}</p></div><SpeakButton label={text(language, "schemes")} /></div>
-    <section className="scheme-intro"><Icon name="shield" size={30} /><div><strong>Personalised for you</strong><span>We used your onboarding answers to find these starting points.</span></div></section>
-    <div className="scheme-list">{suggestions.map(scheme => <article className="scheme-card" key={scheme.name}>
-      <span className="scheme-icon"><Icon name={scheme.icon} size={28} /></span><div><h3>{content(language, scheme.name)}</h3><p>{scheme.summary}</p><button className="scheme-apply" onClick={() => setActiveScheme(scheme)}>{text(language, "apply")} <Icon name="chevron" size={17} /></button></div>
+    <section className="scheme-intro"><Icon name="shield" size={30} /><div><strong>Official government sources</strong><span>Only schemes stored from verified official sources are shown.</span></div></section>
+    {loading && <p className="empty-state">Loading official schemes...</p>}
+    {!loading && schemes.length === 0 && <p className="empty-state">No verified government schemes are available yet.</p>}
+    <div className="scheme-list">{schemes.map(scheme => <article className="scheme-card" key={scheme.id}>
+      <span className="scheme-icon"><Icon name="shield" size={28} /></span><div><h3>{scheme.title}</h3><p>{scheme.description}</p><div className="scheme-actions"><button className="scheme-apply" onClick={() => { setActiveScheme(scheme); setAnswers({}); setAdvisorResult(""); }}>{text(language, "apply")} <Icon name="chevron" size={17} /></button>{scheme.official_link && <a className="scheme-source" href={scheme.official_link} target="_blank" rel="noreferrer">Official source</a>}</div></div>
     </article>)}</div>
-    {activeScheme && <div className="scheme-question-panel"><button className="scheme-close" aria-label="Close eligibility questions" onClick={() => setActiveScheme(null)}><Icon name="close" /></button><span className="eyebrow">CHECK ELIGIBILITY</span><h2>{activeScheme.name}</h2><p>Answer these questions to prepare your application.</p>{activeScheme.questions.map(question => <fieldset key={question}><legend>{question}</legend><div className="eligibility-options"><button className={answers[question] === "Yes" ? "selected" : ""} onClick={() => answerScheme(question, "Yes")}>Yes</button><button className={answers[question] === "No" ? "selected" : ""} onClick={() => answerScheme(question, "No")}>No</button></div></fieldset>)}<button className="primary-action" disabled={activeScheme.questions.some(question => !answers[question])} onClick={submitApplication}>Save answers <Icon name="check" /></button></div>}
+    {activeScheme && <div className="scheme-question-panel"><button className="scheme-close" aria-label="Close eligibility questions" onClick={() => setActiveScheme(null)}><Icon name="close" /></button><span className="eyebrow">CHECK OFFICIAL ELIGIBILITY</span><h2>{activeScheme.title}</h2><p>Answer the scheme criteria questions. Gemini will compare your answers with the stored official criteria.</p>{questions.length === 0 && <p className="empty-state">This scheme has no structured criteria yet. Open the official source to review it.</p>}{questions.map(question => <fieldset key={question}><legend>{question}</legend><div className="eligibility-options"><button className={answers[question] === "Yes" ? "selected" : ""} onClick={() => answerScheme(question, "Yes")}>Yes</button><button className={answers[question] === "No" ? "selected" : ""} onClick={() => answerScheme(question, "No")}>No</button></div></fieldset>)}<button className="primary-action" disabled={questions.length === 0 || questions.some(question => !answers[question])} onClick={() => void submitApplication}>Check eligibility <Icon name="check" /></button>{advisorResult && <p className="advisor-result">{advisorResult}</p>}</div>}
   </main>;
 }
 
 function Marketplace({ notify }: { notify: (message: string) => void }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All tools");
-  const items = [
-    { name: "Mahindra 575 DI", type: "Tractor • 45 HP", price: "₹1,800", distance: "2.4 km", image: photos.tractor, available: true },
-    { name: "Swaraj 744 FE", type: "Tractor • 48 HP", price: "₹2,100", distance: "4.1 km", image: photos.redTractor, available: true },
-    { name: "Rotary Power Tiller", type: "Tiller • 9 HP", price: "₹850", distance: "1.8 km", image: photos.tractor, available: false },
-  ];
+  const [items, setItems] = useState<any[]>([]);
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    void supabase.from("equipment_listings").select("*").eq("is_available", true).order("created_at", { ascending: false }).then(({ data, error }) => {
+      if (error) notify("Equipment could not be loaded");
+      setItems((data || []).map(item => ({ name: item.title, type: item.category, price: `₹${item.daily_rate}`, distance: item.location_address || "Local listing", image: item.images?.[0] || "", available: item.is_available })));
+    });
+  }, [notify]);
   const filteredItems = items.filter(item => {
     const matchesQuery = `${item.name} ${item.type}`.toLowerCase().includes(query.toLowerCase());
     const matchesCategory = category === "All tools" || item.type.toLowerCase().startsWith(category.slice(0, -1).toLowerCase());
@@ -250,7 +297,7 @@ function Marketplace({ notify }: { notify: (message: string) => void }) {
     <div className="filter-row">{["All tools", "Tractors", "Tillers", "Harvesters"].map(filter => <button className={category === filter ? "active" : ""} key={filter} onClick={() => setCategory(filter)}>{filter}</button>)}</div>
     <div className="catalog-grid">
       {filteredItems.map(item => <article className="equipment-card" key={item.name}>
-        <div className="equipment-photo"><img src={item.image} alt={item.name} /><span className={`availability ${item.available ? "" : "busy"}`}>{item.available ? "Available now" : "In use today"}</span></div>
+        <div className="equipment-photo">{item.image ? <img src={item.image} alt={item.name} /> : <div className="image-placeholder"><Icon name="tractor" size={42} /></div>}<span className={`availability ${item.available ? "" : "busy"}`}>{item.available ? "Available now" : "In use today"}</span></div>
         <div className="equipment-content">
           <div className="equipment-title"><div><h3>{item.name}</h3><p>{item.type}</p></div><SpeakButton label={item.name} /></div>
           <div className="meta-line"><span><Icon name="map" size={17} /> {item.distance}</span><span className="rating">★ 4.8</span></div>
@@ -259,49 +306,72 @@ function Marketplace({ notify }: { notify: (message: string) => void }) {
         </div>
       </article>)}
     </div>
-    {filteredItems.length === 0 && <p className="empty-state">No equipment matches your search.</p>}
+    {filteredItems.length === 0 && <p className="empty-state">No equipment is available yet. New listings will appear here.</p>}
   </main>;
 }
 
 function Jobs({ notify }: { notify: (message: string) => void }) {
-  const jobs = [
-    { title: "Onion harvesting", farm: "Patil Family Farm", wage: "₹650", distance: "1.2 km", date: "Tomorrow", tags: ["Harvesting", "6 workers"] },
-    { title: "Drip line setup", farm: "Green Valley Fields", wage: "₹800", distance: "3.5 km", date: "18 Jun", tags: ["Irrigation", "2 workers"] },
-    { title: "Wheat bag loading", farm: "Shinde Farm", wage: "₹700", distance: "5.0 km", date: "20 Jun", tags: ["Loading", "4 workers"] },
-  ];
+  const [jobs, setJobs] = useState<any[]>([]);
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    void supabase.from("job_postings").select("*").eq("status", "open").order("created_at", { ascending: false }).then(({ data, error }) => {
+      if (error) notify("Farm jobs could not be loaded");
+      setJobs((data || []).map(job => ({ title: job.title, farm: job.location_address || "Local farm", wage: `₹${job.daily_wage}`, distance: job.location_address || "Nearby", date: job.date_required, tags: job.skills_required || [] })));
+    });
+  }, [notify]);
   return <main className="page-content">
     <div className="page-heading"><div><span className="eyebrow">WORK NEAR YOU</span><h1>Farm jobs</h1><p>Fair wages. Verified farmers. Paid daily.</p></div><SpeakButton label="nearby farm jobs" /></div>
-    <div className="job-map"><div><Icon name="map" size={32} /><strong>12 jobs within 5 km</strong><span>Near Nashik Road</span></div><button onClick={() => notify("Area selection will be connected to your location")}>Change area</button></div>
+    <div className="job-map"><div><Icon name="map" size={32} /><strong>{jobs.length} open jobs</strong><span>Listings from the database</span></div></div>
     <div className="jobs-list">
       {jobs.map((job, index) => <article className="job-card" key={job.title}>
         <div className={`job-symbol job-${index}`}><Icon name={index === 1 ? "tool" : index === 2 ? "box" : "leaf"} size={32} /></div>
         <div className="job-info"><div className="job-top"><span className="status live">{index === 0 ? "Starts tomorrow" : "Open"}</span><SpeakButton label={job.title} /></div><h3>{job.title}</h3><p className="farm-name">{job.farm}</p>
           <div className="job-meta"><span><Icon name="map" size={17} /> {job.distance}</span><span><Icon name="calendar" size={17} /> {job.date}</span></div>
-          <div className="tags">{job.tags.map(tag => <span key={tag}>{tag}</span>)}</div>
+          <div className="tags">{job.tags.map((tag: string) => <span key={tag}>{tag}</span>)}</div>
           <div className="job-footer"><div><span>Daily wage</span><strong>{job.wage}<small>/day</small></strong></div><button onClick={() => notify(`Calling ${job.farm}`)}><Icon name="phone" /> Call now</button></div>
         </div>
       </article>)}
     </div>
+    {jobs.length === 0 && <p className="empty-state">No farm jobs have been posted yet.</p>}
   </main>;
 }
 
-function Requests({ notify }: { notify: (message: string) => void }) {
+function Workers({ notify }: { notify: (message: string) => void }) {
+  const [workers, setWorkers] = useState<any[]>([]);
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    void supabase.from("profiles").select("*").eq("role", "job_seeker").order("created_at", { ascending: false }).then(({ data, error }) => {
+      if (error) notify("Workers could not be loaded");
+      setWorkers(data || []);
+    });
+  }, [notify]);
+  return <main className="page-content">
+    <div className="page-heading"><div><span className="eyebrow">LOCAL FARM SUPPORT</span><h1>Find workers</h1><p>Connect with available agricultural workers near your farm.</p></div><SpeakButton label="available farm workers" /></div>
+    <div className="jobs-list">{workers.map(worker => <article className="job-card" key={worker.id}><div className="job-symbol job-2"><Icon name="users" size={32} /></div><div className="job-info"><div className="job-top"><span className="status live">Available</span><SpeakButton label={worker.full_name} /></div><h3>{worker.full_name}</h3><p className="farm-name">{worker.location?.district || "Local worker"}</p><div className="tags">{(worker.metadata?.skills || []).map((skill: string) => <span key={skill}>{skill}</span>)}</div><div className="job-footer"><div><span>Availability</span><strong>Contact worker</strong></div><button onClick={() => notify(`Contact request started for ${worker.full_name}`)}><Icon name="phone" /> Contact</button></div></div></article>)}</div>
+    {workers.length === 0 && <p className="empty-state">No workers have registered yet. New worker profiles will appear here.</p>}
+  </main>;
+}
+
+function Requests({ notify, profile }: { notify: (message: string) => void; profile: OnboardingProfile }) {
   const [decisions, setDecisions] = useState<Record<string, string>>({});
-  const decide = (name: string, value: string) => { setDecisions(current => ({ ...current, [name]: value })); notify(`${name}'s request ${value}`); };
+  const [requests, setRequests] = useState<any[]>([]);
+  useEffect(() => {
+    if (!isSupabaseConfigured || !profile.userId) return;
+    void supabase.from("service_requests").select("*").eq("provider_id", profile.userId).order("created_at", { ascending: false }).then(({ data, error }) => {
+      if (error) notify("Requests could not be loaded");
+      setRequests(data || []);
+    });
+  }, [profile.userId, notify]);
+  const decide = (requestId: string, value: string) => { setDecisions(current => ({ ...current, [requestId]: value })); notify(`Request ${value}`); };
   return <main className="page-content">
     <div className="page-heading"><div><span className="eyebrow">OWNER DASHBOARD</span><h1>Requests & inventory</h1><p>Manage your equipment and storage.</p></div><SpeakButton label="owner dashboard" /></div>
-    <div className="inventory-summary">
-      <div><span className="dot available-dot" /><strong>6</strong><small>Available</small></div>
-      <div><span className="dot use-dot" /><strong>3</strong><small>In use</small></div>
-      <div><span className="dot maintenance-dot" /><strong>1</strong><small>Maintenance</small></div>
-    </div>
     <SectionTitle action="Manage inventory">New booking requests</SectionTitle>
-    {["Ramesh Patil", "Vijay More"].map((name, index) => <article className="owner-request" key={name}>
-      <div className="owner-head"><div className="avatar">{name.split(" ").map(n => n[0]).join("")}</div><div><span className="status pending">New request</span><h3>{name}</h3><p><Icon name="map" size={16} /> {index ? "4.3 km away" : "2.4 km away"}</p></div><SpeakButton label={`${name}'s booking request`} /></div>
-      <div className="booking-detail"><span className="booking-icon"><Icon name={index ? "warehouse" : "tractor"} size={29} /></span><div><strong>{index ? "Cold storage • 20 crates" : "Mahindra 575 DI"}</strong><span>{index ? "20–25 June" : "Tomorrow • 8:00 AM – 5:00 PM"}</span></div><b>{index ? "₹1,250" : "₹1,800"}</b></div>
-      {decisions[name] ? <div className={`decision ${decisions[name]}`}><Icon name={decisions[name] === "accepted" ? "check" : "close"} /> Request {decisions[name]}</div> :
-      <div className="decision-actions"><button className="decline" onClick={() => decide(name, "declined")}><Icon name="close" /> Decline</button><button className="accept" onClick={() => decide(name, "accepted")}><Icon name="check" /> Accept</button></div>}
+    {requests.map(request => <article className="owner-request" key={request.id}>
+      <div className="owner-head"><div className="avatar"><Icon name="user" /></div><div><span className="status pending">New request</span><h3>{request.item_type === "storage" ? "Storage request" : "Equipment request"}</h3><p><Icon name="calendar" size={16} /> {request.start_date || "Date pending"}</p></div></div>
+      <div className="booking-detail"><span className="booking-icon"><Icon name={request.item_type === "storage" ? "warehouse" : "tractor"} size={29} /></span><div><strong>{request.item_type === "storage" ? "Storage booking" : "Equipment booking"}</strong><span>{request.end_date || "End date pending"}</span></div><b>₹{request.total_cost || 0}</b></div>
+      {decisions[request.id] ? <div className={`decision ${decisions[request.id]}`}><Icon name={decisions[request.id] === "accepted" ? "check" : "close"} /> Request {decisions[request.id]}</div> : <div className="decision-actions"><button className="decline" onClick={() => decide(request.id, "declined")}><Icon name="close" /> Decline</button><button className="accept" onClick={() => decide(request.id, "accepted")}><Icon name="check" /> Accept</button></div>}
     </article>)}
+    {requests.length === 0 && <p className="empty-state">No service requests have been received yet.</p>}
   </main>;
 }
 
@@ -356,6 +426,9 @@ function Onboarding({ onComplete, language, onLanguageChange }: { onComplete: (m
   const [role, setRole] = useState<UserRole>("Farmer");
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [authPhone, setAuthPhone] = useState("");
   const [question, setQuestion] = useState(0);
   const [answers, setAnswers] = useState<Record<number, string[]>>({});
   const [signup, setSignup] = useState<SignupForm>({ firstName: "", lastName: "", addressLine1: "", addressLine2: "", city: "", state: "", pincode: "", phone: "" });
@@ -377,6 +450,92 @@ function Onboarding({ onComplete, language, onLanguageChange }: { onComplete: (m
   };
   const updateSignup = (field: keyof SignupForm, value: string) => setSignup(current => ({ ...current, [field]: value }));
   const signupReady = Object.values(signup).every(value => value.trim().length > 0) && signup.pincode.length === 6 && signup.phone.length === 10;
+  const sendOtp = (isSignup: boolean) => {
+    const targetPhone = isSignup ? signup.phone : phone;
+    setAuthError("");
+    setAuthPhone(toAuthPhone(targetPhone));
+    setOtp("");
+    setStep(isSignup ? "signupOtp" : "otp");
+  };
+  const verifyOtp = async (isSignup: boolean) => {
+    setAuthError("");
+    setAuthLoading(true);
+    if (!isSupabaseConfigured) {
+      setAuthLoading(false);
+      if (!isSignup) {
+        const storedProfile = localStorage.getItem("kisan-profile");
+        if (storedProfile) {
+          onComplete("Welcome back to Kisan Saathi!", JSON.parse(storedProfile) as OnboardingProfile);
+          return;
+        }
+      }
+      setStep("questions");
+      return;
+    }
+    const { data, error } = await supabase.auth.signInAnonymously({
+      options: {
+        data: {
+          full_name: isSignup ? `${signup.firstName} ${signup.lastName}`.trim() : "User",
+          phone: authPhone,
+          role: roleValues[role],
+          language,
+        },
+      },
+    });
+    if (error || !data.user) {
+      setAuthLoading(false);
+      setAuthError(error?.message || "Temporary sign-in is not enabled in Supabase. Enable Anonymous sign-ins in Authentication settings.");
+      return;
+    }
+    if (isSignup) {
+      const { error: profileError } = await supabase.from("profiles").update({
+        full_name: `${signup.firstName} ${signup.lastName}`.trim(),
+        phone: authPhone,
+        location: { addressLine1: signup.addressLine1, addressLine2: signup.addressLine2, district: signup.city, state: signup.state, pincode: signup.pincode },
+        metadata: { addressLine2: signup.addressLine2 },
+      }).eq("id", data.user.id);
+      if (profileError) {
+        setAuthLoading(false);
+        setAuthError(profileError.message);
+        return;
+      }
+    } else {
+      setSignup(current => ({ ...current, phone }));
+    }
+    setAuthLoading(false);
+    if (!isSignup) {
+      const storedProfile = localStorage.getItem("kisan-profile");
+      if (storedProfile) {
+        onComplete("Welcome back to Kisan Saathi!", JSON.parse(storedProfile) as OnboardingProfile);
+        return;
+      }
+      const { data: savedProfile } = await supabase.from("profiles").select("*").eq("phone", authPhone).maybeSingle();
+      if (savedProfile) {
+        const location = (savedProfile.location || {}) as Record<string, string>;
+        const metadata = (savedProfile.metadata || {}) as { answers?: Record<number, string[]>; addressLine2?: string };
+        onComplete("Welcome back to Kisan Saathi!", {
+          role: displayRoles[savedProfile.role] || "Farmer",
+          answers: metadata.answers || {},
+          userId: savedProfile.id,
+          account: {
+            firstName: savedProfile.full_name.split(" ")[0] || "",
+            lastName: savedProfile.full_name.split(" ").slice(1).join(" "),
+            addressLine1: location.addressLine1 || "",
+            addressLine2: metadata.addressLine2 || location.addressLine2 || "",
+            city: location.district || "",
+            state: location.state || "",
+            pincode: location.pincode || "",
+            phone: savedProfile.phone?.replace(/^\+91/, "") || phone,
+          },
+        });
+        return;
+      }
+      setAuthLoading(false);
+      setAuthError("No registered profile was found for this mobile number.");
+      return;
+    }
+    setStep("questions");
+  };
 
   return <div className="onboarding-shell">
     <header className="onboarding-header">
@@ -402,34 +561,35 @@ function Onboarding({ onComplete, language, onLanguageChange }: { onComplete: (m
             <label>Phone number<input inputMode="numeric" maxLength={10} value={signup.phone} onChange={event => updateSignup("phone", event.target.value.replace(/\D/g, ""))} /></label>
           </div>
           <fieldset className="role-picker signup-role"><legend>{content(language, "I am a...")}</legend><div>{roles.map(item => <button type="button" className={role === item.label ? "selected" : ""} onClick={() => setRole(item.label)} key={item.label}><span><Icon name={item.icon} /></span><b>{content(language, item.label)}</b></button>)}</div></fieldset>
-          <button className="primary-action" disabled={!signupReady} onClick={() => { setPhone(signup.phone); setSignupComplete(false); setStep("signupOtp"); }}>Create account <Icon name="chevron" /></button>
+          {authError && <p className="auth-error" role="alert">{authError}</p>}
+          <button className="primary-action" disabled={!signupReady || authLoading} onClick={() => { setPhone(signup.phone); setSignupComplete(false); void sendOtp(true); }}>{authLoading ? "Sending code..." : "Create account"} <Icon name="chevron" /></button>
           <button className="text-action" onClick={() => setAuthMode("login")}>Already have an account? <b>Sign in</b></button>
         </>}
         {step === "signupOtp" && <>
           <button className="back-button" onClick={() => setStep("login")}>‹ Back</button>
           <div className="otp-illustration"><Icon name="phone" size={35} /></div>
-          <div className="center-heading"><span className="eyebrow">VERIFY YOUR PHONE</span><h1>Confirm your account</h1><p>We sent a 4-digit code to +91 ••••••{signup.phone.slice(-4)}</p></div>
-          <div className="otp-field"><input autoFocus aria-label="Sign up verification code" inputMode="numeric" maxLength={4} placeholder="—  —  —  —" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ""))} /></div>
-          <button className="primary-action" disabled={otp.length !== 4} onClick={() => setStep("questions")}><Icon name="check" /> Verify and continue</button>
-          <button className="text-action">Didn't get it? <b>Send again</b></button>
+          <div className="center-heading"><span className="eyebrow">TEMPORARY VERIFICATION</span><h1>Enter any 6-digit code</h1><p>SMS verification is disabled for this development build.</p></div>
+          <div className="otp-field"><input autoFocus aria-label="Sign up verification code" inputMode="numeric" maxLength={6} placeholder="—  —  —  —  —  —" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ""))} /></div>
+          {authError && <p className="auth-error" role="alert">{authError}</p>}
+          <button className="primary-action" disabled={otp.length !== 6 || authLoading} onClick={() => void verifyOtp(true)}><Icon name="check" /> {authLoading ? "Opening account..." : "Continue"}</button>
         </>}
         {step === "login" && authMode === "login" && <>
           <div className="auth-card-heading"><span className="welcome-icon"><Icon name="user" /></span><div><span className="eyebrow">{text(language, "welcome")}</span><h1>{text(language, "signIn")}</h1><p>{text(language, "chooseUse")}</p></div><SpeakButton label={text(language, "signIn")} hidden={language === "ta" || language === "ml"} /></div>
           {signupComplete && <p className="signup-success">Account created. Sign in with your phone number to continue.</p>}
-          <fieldset className="role-picker"><legend>{content(language, "I am a...")}</legend><div>{roles.map(item => <button type="button" className={role === item.label ? "selected" : ""} onClick={() => setRole(item.label)} key={item.label}><span><Icon name={item.icon} /></span><b>{content(language, item.label)}</b><small>{content(language, item.help || "")}</small><i><Icon name="check" size={16} /></i></button>)}</div></fieldset>
           <label className="field-label" htmlFor="phone">{text(language, "mobile")}</label>
           <div className="phone-field"><span>+91</span><input id="phone" inputMode="numeric" maxLength={10} placeholder="Enter 10-digit number" value={phone} onChange={event => setPhone(event.target.value.replace(/\D/g, ""))} /><SpeakButton label="mobile number field" /></div>
-          <button className="primary-action" disabled={phone.length !== 10} onClick={() => setStep("otp")}>{text(language, "sendOtp")} <Icon name="chevron" /></button>
+          {authError && <p className="auth-error" role="alert">{authError}</p>}
+          <button className="primary-action" disabled={phone.length !== 10 || authLoading} onClick={() => sendOtp(false)}>Continue with phone <Icon name="chevron" /></button>
           <p className="secure-note"><Icon name="shield" size={18} /> {text(language, "secure")}</p>
           <button className="text-action signup-link" onClick={() => { setSignupComplete(false); setAuthMode("signup"); }}>New here? <b>Create an account</b></button>
         </>}
         {step === "otp" && <>
           <button className="back-button" onClick={() => setStep("login")}>‹ Back</button>
           <div className="otp-illustration"><Icon name="phone" size={35} /></div>
-          <div className="center-heading"><span className="eyebrow">VERIFY YOUR NUMBER</span><h1>Enter the 4-digit code</h1><p>We sent it to +91 ••••••{phone.slice(-4)}</p></div>
-          <div className="otp-field"><input autoFocus aria-label="Four digit verification code" inputMode="numeric" maxLength={4} placeholder="—  —  —  —" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ""))} /></div>
-          <button className="primary-action" disabled={otp.length !== 4} onClick={() => setStep("questions")}><Icon name="check" /> Verify and continue</button>
-          <button className="text-action">Didn't get it? <b>Send again</b></button>
+          <div className="center-heading"><span className="eyebrow">TEMPORARY VERIFICATION</span><h1>Enter any 6-digit code</h1><p>SMS verification is disabled for this development build.</p></div>
+          <div className="otp-field"><input autoFocus aria-label="Six digit verification code" inputMode="numeric" maxLength={6} placeholder="—  —  —  —  —  —" value={otp} onChange={event => setOtp(event.target.value.replace(/\D/g, ""))} /></div>
+          {authError && <p className="auth-error" role="alert">{authError}</p>}
+          <button className="primary-action" disabled={otp.length !== 6 || authLoading} onClick={() => void verifyOtp(false)}><Icon name="check" /> {authLoading ? "Opening session..." : "Continue"}</button>
         </>}
         {step === "questions" && <>
           <div className="question-top"><div><span className="eyebrow">{text(language, "onboarding")} / {content(language, role)}</span><div className="question-dots">{questions.map((_, index) => <i className={index <= question ? "active" : ""} key={index} />)}</div></div><button onClick={() => onComplete("Welcome to Kisan Saathi!", { role, answers, account: signup })}>{text(language, "skip")}</button></div>
@@ -450,6 +610,7 @@ const navItems = [
   { id: "home", labelKey: "home", icon: "home" as IconName },
   { id: "market", labelKey: "equipment", icon: "tractor" as IconName },
   { id: "jobs", labelKey: "jobs", icon: "briefcase" as IconName },
+  { id: "workers", labelKey: "workers", icon: "users" as IconName },
   { id: "requests", labelKey: "requests", icon: "bell" as IconName },
   { id: "profile", labelKey: "profile", icon: "user" as IconName },
   { id: "schemes", labelKey: "schemes", icon: "shield" as IconName },
@@ -457,6 +618,7 @@ const navItems = [
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const [page, setPage] = useState("home");
   const [language, setLanguage] = useState<LanguageCode>(() => (localStorage.getItem("kisan-language") as LanguageCode) || "en");
   const [listening, setListening] = useState(false);
@@ -464,8 +626,68 @@ export default function App() {
   const [profile, setProfile] = useState<OnboardingProfile>({ role: "Farmer", answers: {} });
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2800); };
   const changeLanguage = (nextLanguage: LanguageCode) => { setLanguage(nextLanguage); localStorage.setItem("kisan-language", nextLanguage); };
-  if (!authenticated) return <Onboarding language={language} onLanguageChange={changeLanguage} onComplete={(message, completedProfile) => { setProfile(completedProfile); setAuthenticated(true); setToast(message); window.setTimeout(() => setToast(""), 2800); }} />;
-  const visibleNavItems = navItems.filter(item => (item.id !== "schemes" || profile.role === "Farmer") && (item.id !== "requests" || profile.role !== "Farmer"));
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setAuthReady(true);
+      return;
+    }
+    let mounted = true;
+    const restoreSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!mounted) return;
+      if (session) {
+        const { data: storedProfile } = await supabase.from("profiles").select("*").eq("id", session.user.id).maybeSingle();
+        if (storedProfile) {
+          const storedLocation = (storedProfile.location || {}) as Record<string, string>;
+          const storedMetadata = (storedProfile.metadata || {}) as { answers?: Record<number, string[]>; addressLine2?: string };
+          setProfile({
+            role: displayRoles[storedProfile.role] || "Farmer",
+            answers: storedMetadata.answers || {},
+            userId: session.user.id,
+            account: {
+              firstName: storedProfile.full_name.split(" ")[0] || "",
+              lastName: storedProfile.full_name.split(" ").slice(1).join(" "),
+              addressLine1: storedLocation.addressLine1 || "",
+              addressLine2: storedMetadata.addressLine2 || storedLocation.addressLine2 || "",
+              city: storedLocation.district || "",
+              state: storedLocation.state || "",
+              pincode: storedLocation.pincode || "",
+              phone: storedProfile.phone?.replace(/^\+91/, "") || "",
+            },
+          });
+          setAuthenticated(true);
+        }
+      }
+      setAuthReady(true);
+    };
+    void restoreSession();
+    return () => { mounted = false; };
+  }, []);
+  const completeProfile = async (message: string, completedProfile: OnboardingProfile) => {
+    localStorage.setItem("kisan-profile", JSON.stringify(completedProfile));
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const account = completedProfile.account;
+      const profileUpdates: { metadata: Json; phone?: string; full_name?: string } = { metadata: { addressLine2: account?.addressLine2 || "", answers: completedProfile.answers } };
+      if (account?.phone) {
+        profileUpdates.phone = toAuthPhone(account.phone);
+      }
+      if (account?.firstName || account?.lastName) {
+        profileUpdates.full_name = `${account.firstName} ${account.lastName}`.trim();
+      }
+      const { error } = await supabase.from("profiles").update(profileUpdates).eq("id", user.id);
+      if (error) {
+        notify(error.message);
+        return;
+      }
+    }
+    setProfile({ ...completedProfile, userId: user?.id });
+    setAuthenticated(true);
+    notify(message);
+  };
+  if (!authReady) return null;
+  if (!authenticated) return <Onboarding language={language} onLanguageChange={changeLanguage} onComplete={(message, completedProfile) => { void completeProfile(message, completedProfile); }} />;
+  const visibleNavItems = navItems.filter(item => (item.id !== "schemes" || profile.role === "Farmer") && (item.id !== "requests" || profile.role !== "Farmer") && (item.id !== "jobs" || profile.role === "Job Seeker") && (item.id !== "workers" || profile.role === "Farmer"));
   return <div className="app-shell">
     <aside className="desktop-sidebar">
       <button className="brand" onClick={() => setPage("home")}><span className="brand-mark"><Icon name="leaf" /></span><span>Kisan<br /><b>Saathi</b></span></button>
@@ -475,13 +697,14 @@ export default function App() {
     <div className="app-main">
       <header className="topbar">
         <button className="brand mobile-brand" onClick={() => setPage("home")}><span className="brand-mark"><Icon name="leaf" /></span><span>Kisan <b>Saathi</b></span></button>
-        <div className="top-actions"><LanguageSelect language={language} onChange={changeLanguage} />{profile.role !== "Farmer" && <button className="notification-btn" aria-label="Notifications" onClick={() => { setPage("requests"); }}><Icon name="bell" /><i>2</i></button>}<button className="profile-chip" onClick={() => setPage("profile")}><img src={photos.farmer} alt="" /><span>Ramesh<small>{profile.role}</small></span></button></div>
+        <div className="top-actions"><LanguageSelect language={language} onChange={changeLanguage} />{profile.role !== "Farmer" && <button className="notification-btn" aria-label="Notifications" onClick={() => { setPage("requests"); }}><Icon name="bell" /><i>2</i></button>}<button className="profile-chip" onClick={() => setPage("profile")}><img src={photos.farmer} alt="" /><span>{profile.account?.firstName || "User"}<small>{profile.role}</small></span></button></div>
       </header>
       {page === "home" && <Dashboard notify={notify} go={setPage} profile={profile} language={language} />}
       {page === "market" && <Marketplace notify={notify} />}
       {page === "jobs" && <Jobs notify={notify} />}
-      {page === "requests" && <Requests notify={notify} />}
-      {page === "profile" && <Profile profile={profile} notify={notify} language={language} onLogout={() => { setAuthenticated(false); setPage("home"); }} />}
+      {page === "workers" && profile.role === "Farmer" && <Workers notify={notify} />}
+      {page === "requests" && <Requests notify={notify} profile={profile} />}
+      {page === "profile" && <Profile profile={profile} notify={notify} language={language} onLogout={() => { void supabase.auth.signOut(); setAuthenticated(false); setPage("home"); }} />}
       {page === "schemes" && profile.role === "Farmer" && <GovernmentSchemes profile={profile} language={language} notify={notify} />}
     </div>
     <button className={`floating-mic ${listening ? "listening" : ""}`} aria-label="Voice navigation" onClick={() => setListening(value => !value)}><Icon name={listening ? "close" : "mic"} size={30} /></button>
