@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import type { Database } from '../types/database.generated';
 import type {
   EquipmentListing,
   StorageListing,
@@ -14,18 +15,10 @@ import type {
 // ============================================================
 // 1. PROFILES API
 // ============================================================
-export async function getProfile(userId: string) {
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .single();
-
-  if (error) throw error;
-  return data;
-}
-
-export async function updateProfile(userId: string, updates: Partial<Parameters<typeof supabase.from<'profiles'>['update']>[0]>) {
+export async function updateProfile(
+  userId: string,
+  updates: Database['public']['Tables']['profiles']['Update']
+) {
   const { data, error } = await supabase
     .from('profiles')
     .update(updates)
