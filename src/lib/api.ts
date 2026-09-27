@@ -12,9 +12,22 @@ import type {
   GovernmentScheme,
 } from '../types/database';
 
+export const SAFE_PROFILE_COLUMNS = 'id, full_name, role, location, avatar_url';
+
 // ============================================================
 // 1. PROFILES API
 // ============================================================
+export async function fetchProfile(userId: string) {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
 export async function updateProfile(
   userId: string,
   updates: Database['public']['Tables']['profiles']['Update']
@@ -30,29 +43,62 @@ export async function updateProfile(
   return data;
 }
 
+export async function updatePersonalizationProfile(
+  userId: string,
+  personalization: {
+    crops?: string[];
+    farm_size_range?: string | null;
+    interests?: string[];
+    equipment_types?: string[];
+    work_skills?: string[];
+    storage_types?: string[];
+    onboarding_completed?: boolean;
+  }
+) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user || user.id !== userId) {
+    throw new Error('Unauthorized profile modification.');
+  }
+
+  const { data, error } = await (supabase
+    .from('profiles')
+    .update as any)({
+      ...personalization,
+      onboarding_completed: personalization.onboarding_completed ?? true,
+    })
+    .eq('id', user.id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
 // ============================================================
 // 2. EQUIPMENT MARKETPLACE API
 // ============================================================
 export async function fetchEquipmentListings(category?: string) {
   let query = supabase
     .from('equipment_listings')
-    .select('*, owner:profiles(*)')
+    .select(`*, owner:profiles!owner_id(${SAFE_PROFILE_COLUMNS})`)
     .eq('is_available', true)
     .order('created_at', { ascending: false });
 
-  if (category) {
-    query = query.eq('category', category);
+  if (category && category !== 'All tools') {
+    query = query.ilike('category', `%${category}%`);
   }
 
   const { data, error } = await query;
   if (error) throw error;
-  return data as (EquipmentListing & { owner: any })[];
+  return data as unknown as (EquipmentListing & { owner: Partial<Database['public']['Tables']['profiles']['Row']> })[];
 }
 
-export async function createEquipmentListing(listing: Omit<EquipmentListing, 'id' | 'created_at' | 'updated_at'>) {
+export async function createEquipmentListing(
+  listing: Database['public']['Tables']['equipment_listings']['Insert']
+) {
   const { data, error } = await supabase
     .from('equipment_listings')
-    .insert(listing as any)
+    .insert(listing)
     .select()
     .single();
 
@@ -66,23 +112,25 @@ export async function createEquipmentListing(listing: Omit<EquipmentListing, 'id
 export async function fetchStorageListings(type?: string) {
   let query = supabase
     .from('storage_listings')
-    .select('*, owner:profiles(*)')
+    .select(`*, owner:profiles!owner_id(${SAFE_PROFILE_COLUMNS})`)
     .gt('available_capacity_tons', 0)
     .order('created_at', { ascending: false });
 
-  if (type) {
+  if (type && type !== 'All storage') {
     query = query.eq('storage_type', type as any);
   }
 
   const { data, error } = await query;
   if (error) throw error;
-  return data as (StorageListing & { owner: any })[];
+  return data as unknown as (StorageListing & { owner: Partial<Database['public']['Tables']['profiles']['Row']> })[];
 }
 
-export async function createStorageListing(listing: Omit<StorageListing, 'id' | 'created_at' | 'updated_at'>) {
+export async function createStorageListing(
+  listing: Database['public']['Tables']['storage_listings']['Insert']
+) {
   const { data, error } = await supabase
     .from('storage_listings')
-    .insert(listing as any)
+    .insert(listing)
     .select()
     .single();
 
@@ -96,18 +144,20 @@ export async function createStorageListing(listing: Omit<StorageListing, 'id' | 
 export async function fetchJobPostings(status: string = 'open') {
   const { data, error } = await supabase
     .from('job_postings')
-    .select('*, farmer:profiles(*)')
-    .eq('status', status as any)
+    .select(`*, farmer:profiles!farmer_id(${SAFE_PROFILE_COLUMNS})`)
+    .eq('status', status)
     .order('created_at', { ascending: false });
 
   if (error) throw error;
-  return data as (JobPosting & { farmer: any })[];
+  return data as unknown as (JobPosting & { farmer: Partial<Database['public']['Tables']['profiles']['Row']> })[];
 }
 
-export async function createJobPosting(posting: Omit<JobPosting, 'id' | 'workers_hired' | 'created_at' | 'updated_at'>) {
+export async function createJobPosting(
+  posting: Database['public']['Tables']['job_postings']['Insert']
+) {
   const { data, error } = await supabase
     .from('job_postings')
-    .insert(posting as any)
+    .insert(posting)
     .select()
     .single();
 
@@ -123,7 +173,7 @@ export async function applyForJob(jobId: string, workerId: string, notes?: strin
       worker_id: workerId,
       notes: notes || null,
       status: 'pending',
-    } as any)
+    })
     .select()
     .single();
 
@@ -131,10 +181,13 @@ export async function applyForJob(jobId: string, workerId: string, notes?: strin
   return data;
 }
 
-export async function updateJobApplicationStatus(applicationId: string, status: 'accepted' | 'rejected' | 'withdrawn') {
+export async function updateJobApplicationStatus(
+  applicationId: string,
+  status: 'accepted' | 'rejected' | 'withdrawn'
+) {
   const { data, error } = await supabase
     .from('job_applications')
-    .update({ status } as any)
+    .update({ status })
     .eq('id', applicationId)
     .select()
     .single();
@@ -146,13 +199,15 @@ export async function updateJobApplicationStatus(applicationId: string, status: 
 // ============================================================
 // 5. SERVICE REQUESTS & BOOKINGS API
 // ============================================================
-export async function createServiceRequest(request: Omit<ServiceRequest, 'id' | 'status' | 'created_at' | 'updated_at'>) {
+export async function createServiceRequest(
+  request: Database['public']['Tables']['service_requests']['Insert']
+) {
   const { data, error } = await supabase
     .from('service_requests')
     .insert({
       ...request,
-      status: 'pending',
-    } as any)
+      status: request.status || 'pending',
+    })
     .select()
     .single();
 
@@ -160,10 +215,13 @@ export async function createServiceRequest(request: Omit<ServiceRequest, 'id' | 
   return data;
 }
 
-export async function updateServiceRequestStatus(requestId: string, status: 'confirmed' | 'completed' | 'cancelled') {
+export async function updateServiceRequestStatus(
+  requestId: string,
+  status: 'confirmed' | 'completed' | 'cancelled'
+) {
   const { data, error } = await supabase
     .from('service_requests')
-    .update({ status } as any)
+    .update({ status })
     .eq('id', requestId)
     .select()
     .single();
@@ -175,7 +233,7 @@ export async function updateServiceRequestStatus(requestId: string, status: 'con
 export async function fetchUserRequests(userId: string) {
   const { data, error } = await supabase
     .from('service_requests')
-    .select('*, requester:profiles!requester_id(*), provider:profiles!provider_id(*)')
+    .select(`*, requester:profiles!requester_id(${SAFE_PROFILE_COLUMNS}), provider:profiles!provider_id(${SAFE_PROFILE_COLUMNS})`)
     .or(`requester_id.eq.${userId},provider_id.eq.${userId}`)
     .order('created_at', { ascending: false });
 
@@ -189,7 +247,7 @@ export async function fetchUserRequests(userId: string) {
 export async function fetchUserReviews(targetUserId: string) {
   const { data, error } = await supabase
     .from('reviews')
-    .select('*, reviewer:profiles!reviewer_id(*)')
+    .select(`*, reviewer:profiles!reviewer_id(${SAFE_PROFILE_COLUMNS})`)
     .eq('target_user_id', targetUserId)
     .order('created_at', { ascending: false });
 
@@ -197,10 +255,12 @@ export async function fetchUserReviews(targetUserId: string) {
   return data;
 }
 
-export async function createReview(review: Omit<Review, 'id' | 'created_at'>) {
+export async function createReview(
+  review: Database['public']['Tables']['reviews']['Insert']
+) {
   const { data, error } = await supabase
     .from('reviews')
-    .insert(review as any)
+    .insert(review)
     .select()
     .single();
 
@@ -208,10 +268,12 @@ export async function createReview(review: Omit<Review, 'id' | 'created_at'>) {
   return data;
 }
 
-export async function fetchCommunityMessages(channel: 'farmer_forum' | 'worker_forum' | 'general' = 'general') {
+export async function fetchCommunityMessages(
+  channel: 'farmer_forum' | 'worker_forum' | 'general' = 'general'
+) {
   const { data, error } = await supabase
     .from('community_messages')
-    .select('*, sender:profiles(*)')
+    .select(`*, sender:profiles!sender_id(${SAFE_PROFILE_COLUMNS})`)
     .eq('channel', channel)
     .order('created_at', { ascending: true })
     .limit(100);
@@ -220,7 +282,12 @@ export async function fetchCommunityMessages(channel: 'farmer_forum' | 'worker_f
   return data;
 }
 
-export async function sendCommunityMessage(senderId: string, channel: 'farmer_forum' | 'worker_forum' | 'general', content: string, mediaUrl?: string) {
+export async function sendCommunityMessage(
+  senderId: string,
+  channel: 'farmer_forum' | 'worker_forum' | 'general',
+  content: string,
+  mediaUrl?: string
+) {
   const { data, error } = await supabase
     .from('community_messages')
     .insert({
@@ -228,7 +295,7 @@ export async function sendCommunityMessage(senderId: string, channel: 'farmer_fo
       channel,
       content,
       media_url: mediaUrl || null,
-    } as any)
+    })
     .select()
     .single();
 
@@ -236,8 +303,72 @@ export async function sendCommunityMessage(senderId: string, channel: 'farmer_fo
   return data;
 }
 
+export function subscribeToCommunityMessages(
+  channel: 'farmer_forum' | 'worker_forum' | 'general',
+  callback: (payload: any) => void
+) {
+  return supabase
+    .channel(`community-${channel}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'community_messages',
+        filter: `channel=eq.${channel}`,
+      },
+      (payload) => callback(payload.new)
+    )
+    .subscribe();
+}
+
 // ============================================================
-// 7. GOVERNMENT SCHEMES & GEMINI ADVISOR API
+// 7. NOTIFICATIONS API
+// ============================================================
+export async function fetchUserNotifications(userId: string) {
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function markNotificationAsRead(notificationId: string) {
+  const { data, error } = await supabase
+    .from('notifications')
+    .update({ read: true })
+    .eq('id', notificationId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export function subscribeToUserNotifications(
+  userId: string,
+  callback: (payload: any) => void
+) {
+  return supabase
+    .channel(`notifications-${userId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${userId}`,
+      },
+      (payload) => callback(payload.new)
+    )
+    .subscribe();
+}
+
+// ============================================================
+// 8. GOVERNMENT SCHEMES & GEMINI ADVISOR API
 // ============================================================
 export async function fetchGovernmentSchemes(category?: string) {
   let query = supabase.from('government_schemes').select('*');
@@ -261,3 +392,146 @@ export async function consultSchemeAdvisor(profile: any, queryText: string) {
   return data;
 }
 
+// ============================================================
+// 9. MEDIA STORAGE UPLOADS (kisan-media bucket)
+// ============================================================
+export async function uploadMedia(file: File, folder: string = 'general') {
+  const fileExt = file.name.split('.').pop();
+  const fileName = `${folder}/${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
+
+  const { data, error } = await supabase.storage
+    .from('kisan-media')
+    .upload(fileName, file, {
+      cacheControl: '3600',
+      upsert: false,
+    });
+
+  if (error) throw error;
+
+  const { data: publicUrlData } = supabase.storage
+    .from('kisan-media')
+    .getPublicUrl(data.path);
+
+  return publicUrlData.publicUrl;
+}
+
+export async function uploadProfileAvatar(file: File) {
+  // 1. Authenticated User Check
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError || !user) {
+    throw new Error('Authentication required to upload profile avatar.');
+  }
+
+  // 2. Validate File MIME type and map to extension
+  const mimeExtensionMap: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+  };
+
+  const fileExt = mimeExtensionMap[file.type];
+  if (!fileExt) {
+    throw new Error('Invalid file format. Only JPEG, PNG, WEBP, and GIF images are allowed.');
+  }
+
+  // 3. Validate File Size (Max 5 MB)
+  const MAX_SIZE = 5 * 1024 * 1024;
+  if (file.size > MAX_SIZE) {
+    throw new Error('File size exceeds maximum limit of 5MB.');
+  }
+
+  const uniqueId = Math.random().toString(36).substring(2, 8);
+  const filePath = `avatars/${user.id}/${Date.now()}_${uniqueId}.${fileExt}`;
+
+  // 4. Upload to kisan-media bucket
+  const { data, error: uploadError } = await supabase.storage
+    .from('kisan-media')
+    .upload(filePath, file, {
+      cacheControl: '3600',
+      upsert: true,
+    });
+
+  if (uploadError) throw uploadError;
+
+  // 5. Get public URL
+  const { data: publicUrlData } = supabase.storage
+    .from('kisan-media')
+    .getPublicUrl(data.path);
+
+  const avatarUrl = `${publicUrlData.publicUrl}?t=${Date.now()}`;
+
+  // 6. Update profile record in database
+  const { data: updatedProfile, error: profileError } = await (supabase
+    .from('profiles')
+    .update as any)({ avatar_url: avatarUrl })
+    .eq('id', user.id)
+    .select()
+    .single();
+
+  // Rollback storage upload if DB update fails
+  if (profileError) {
+    try {
+      await supabase.storage.from('kisan-media').remove([filePath]);
+    } catch (cleanupErr) {
+      console.warn('Rollback upload cleanup failed:', cleanupErr);
+    }
+    throw profileError;
+  }
+
+  // 7. Clean up old avatar files in user's avatar directory (best effort)
+  try {
+    const { data: files } = await supabase.storage
+      .from('kisan-media')
+      .list(`avatars/${user.id}`);
+
+    if (files && files.length > 1) {
+      const currentFileName = filePath.split('/').pop();
+      const filesToDelete = files
+        .filter(f => f.name !== currentFileName)
+        .map(f => `avatars/${user.id}/${f.name}`);
+
+      if (filesToDelete.length > 0) {
+        await supabase.storage.from('kisan-media').remove(filesToDelete);
+      }
+    }
+  } catch (err) {
+    console.warn('Old avatar cleanup skipped:', err);
+  }
+
+  return updatedProfile;
+}
+
+export async function removeProfileAvatar() {
+  // 1. Authenticated User Check
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError || !user) {
+    throw new Error('Authentication required to remove profile avatar.');
+  }
+
+  // 2. Clear profile avatar_url in database
+  const { data: updatedProfile, error: profileError } = await (supabase
+    .from('profiles')
+    .update as any)({ avatar_url: null })
+    .eq('id', user.id)
+    .select()
+    .single();
+
+  if (profileError) throw profileError;
+
+  // 3. Remove owned files in user's avatars directory only
+  try {
+    const { data: files } = await supabase.storage
+      .from('kisan-media')
+      .list(`avatars/${user.id}`);
+
+    if (files && files.length > 0) {
+      const filesToDelete = files.map(f => `avatars/${user.id}/${f.name}`);
+      await supabase.storage.from('kisan-media').remove(filesToDelete);
+    }
+  } catch (err) {
+    console.warn('Avatar directory cleanup warning:', err);
+  }
+
+  return updatedProfile;
+}

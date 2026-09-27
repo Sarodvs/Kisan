@@ -22,8 +22,16 @@ export interface Profile {
   phone: string | null;
   role: UserRole;
   language: string;
+  avatar_url?: string | null;
   location: LocationCoords | null;
   metadata: Record<string, any>;
+  crops?: string[];
+  farm_size_range?: string | null;
+  interests?: string[];
+  equipment_types?: string[];
+  work_skills?: string[];
+  storage_types?: string[];
+  onboarding_completed?: boolean;
   created_at: string;
 }
 
