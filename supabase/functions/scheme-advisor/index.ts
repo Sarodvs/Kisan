@@ -23,9 +23,31 @@ interface RequestBody {
     language?: string;
   };
   query?: string;
+  mode?: "start" | "continue";
+  answers?: Array<{ question?: string; answer?: "Yes" | "No" }>;
+  scheme?: {
+    id?: string;
+    title?: string;
+    category?: string;
+    description?: string;
+    benefits?: string;
+    eligibility_criteria?: Record<string, unknown>;
+    official_link?: string;
+    source_url?: string;
+    source_type?: string;
+  };
 }
 
 const VALID_ROLES = ["farmer", "tool_lender", "job_seeker", "storage_owner"];
+
+function encodePdf(bytes: Uint8Array) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
 
 serve(async (req: Request) => {
   // 1. Handle CORS preflight request
@@ -117,7 +139,7 @@ serve(async (req: Request) => {
     // 4. Fetch Trusted Government Schemes Data Directly from Database Server-Side
     const { data: trustedSchemes, error: dbError } = await supabase
       .from("government_schemes")
-      .select("id, title, category, description, benefits, eligibility_criteria, official_link");
+      .select("id, title, category, description, benefits, eligibility_criteria, official_link, source_url, source_type");
 
     if (dbError) {
       return new Response(
@@ -133,6 +155,70 @@ serve(async (req: Request) => {
         JSON.stringify({ error: "GEMINI_API_KEY environment variable is not configured." }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
+    }
+
+    if (body.scheme) {
+      const scheme = (trustedSchemes || []).find((item: any) =>
+        (body.scheme?.id && item.id === body.scheme.id) || item.title === body.scheme?.title
+      ) || body.scheme;
+      const answers = Array.isArray(body.answers)
+        ? body.answers.filter((item) => item && (item.answer === "Yes" || item.answer === "No")).slice(0, 8)
+        : [];
+      const pdfUrl = typeof scheme.source_url === "string" && (scheme.source_type === "pdf" || scheme.source_url.toLowerCase().split("?")[0].endsWith(".pdf"))
+        ? scheme.source_url
+        : null;
+      const parts: Array<Record<string, unknown>> = [];
+
+      if (pdfUrl) {
+        try {
+          const pdfResponse = await fetch(pdfUrl);
+          if (pdfResponse.ok) {
+            parts.push({ inlineData: { mimeType: "application/pdf", data: encodePdf(new Uint8Array(await pdfResponse.arrayBuffer())) } });
+          }
+        } catch {
+          // Use the verified database criteria if the source PDF is temporarily unavailable.
+        }
+      }
+
+      const eligibilityPrompt = `You help an Indian farmer check one government scheme. Use only the official scheme context below and, when present, the attached official PDF. Ask one short question at a time that can be answered Yes or No. Ask only questions needed to decide eligibility. After enough answers, return a result. Never invent criteria.
+
+Official scheme context:
+${JSON.stringify(scheme)}
+
+Farmer profile:
+${JSON.stringify({ role, crops, landSize, district, state, language })}
+
+Previous answers:
+${JSON.stringify(answers)}
+
+Return strict JSON in exactly one of these forms:
+{ "question": "One simple yes/no question" }
+or
+{ "result": "eligible" | "not_eligible" | "needs_verification", "reason": "Short explanation tied to the criteria", "next_steps": ["Short practical next step"] }`;
+      parts.push({ text: eligibilityPrompt });
+
+      const eligibilityRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts }],
+          generationConfig: { responseMimeType: "application/json", temperature: 0.1 },
+        }),
+      });
+
+      if (!eligibilityRes.ok) {
+        return new Response(JSON.stringify({ error: `Gemini API Error: ${await eligibilityRes.text()}` }), {
+          status: 502,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const eligibilityData = await eligibilityRes.json();
+      const eligibilityText = eligibilityData.candidates?.[0]?.content?.parts?.[0]?.text;
+      return new Response(eligibilityText || JSON.stringify({ error: "No eligibility response generated." }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // 6. Build Grounded Prompt with Strict Isolation

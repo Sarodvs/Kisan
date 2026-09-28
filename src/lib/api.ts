@@ -617,6 +617,25 @@ export async function consultSchemeAdvisor(profile: any, queryText: string) {
   return data;
 }
 
+export async function checkSchemeEligibility(profile: any, scheme: any, answers: Array<{ question: string; answer: "Yes" | "No" }>) {
+  const { data, error } = await supabase.functions.invoke('scheme-advisor', {
+    body: { profile, scheme, answers, mode: answers.length === 0 ? 'start' : 'continue' },
+  });
+
+  if (error) throw error;
+  if (typeof data === "string") {
+    try {
+      return JSON.parse(data.replace(/^```json\s*|\s*```$/g, "").trim());
+    } catch {
+      throw new Error("The AI returned an invalid eligibility response.");
+    }
+  }
+  if (!data || (typeof data !== "object") || (!data.question && !data.result)) {
+    throw new Error(data?.error || "The AI did not return a question or eligibility result.");
+  }
+  return data;
+}
+
 // ============================================================
 // 9. MEDIA STORAGE UPLOADS (kisan-media bucket)
 // ============================================================

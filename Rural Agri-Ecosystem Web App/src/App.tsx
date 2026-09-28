@@ -25,7 +25,7 @@ import {
   fetchUserRequests,
   updateServiceRequestStatus,
   fetchGovernmentSchemes,
-  consultSchemeAdvisor,
+  checkSchemeEligibility,
   fetchCommunityMessages,
   sendCommunityMessage,
   subscribeToCommunityMessages,
@@ -730,11 +730,12 @@ function GovernmentSchemes({ profile, notify, language }: { profile: OnboardingP
   const [schemes, setSchemes] = useState<any[]>(OFFICIAL_GOVERNMENT_SCHEMES);
   const [loading, setLoading] = useState(true);
   const [activeScheme, setActiveScheme] = useState<any | null>(null);
-  const [query, setQuery] = useState("");
   const [searchFilter, setSearchFilter] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
-  const [advisorResponse, setAdvisorResponse] = useState<any | null>(null);
-  const [advisorLoading, setAdvisorLoading] = useState(false);
+  const [eligibilityResponse, setEligibilityResponse] = useState<any | null>(null);
+  const [eligibilityAnswers, setEligibilityAnswers] = useState<Array<{ question: string; answer: "Yes" | "No" }>>([]);
+  const [eligibilityLoading, setEligibilityLoading] = useState(false);
+  const [eligibilityError, setEligibilityError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchGovernmentSchemes()
@@ -749,21 +750,36 @@ function GovernmentSchemes({ profile, notify, language }: { profile: OnboardingP
       .finally(() => setLoading(false));
   }, []);
 
-  const handleAskAdvisor = async () => {
-    if (!query.trim()) return;
-    setAdvisorLoading(true);
-    setAdvisorResponse(null);
+  const handleCheckEligibility = async (scheme: any, answers: Array<{ question: string; answer: "Yes" | "No" }> = []) => {
+    setEligibilityLoading(true);
+    setEligibilityError(null);
     try {
-      const res = await consultSchemeAdvisor({
+      const res = await checkSchemeEligibility({
         role: roleMap[profile.role],
         language,
-      }, query);
-      setAdvisorResponse(res);
+      }, scheme, answers);
+      setEligibilityResponse(res);
     } catch (err: any) {
-      notify(`Scheme Advisor error: ${err.message}`);
+      setEligibilityError(err.message || "Unable to contact the AI eligibility advisor.");
+      notify(`Eligibility check error: ${err.message}`);
     } finally {
-      setAdvisorLoading(false);
+      setEligibilityLoading(false);
     }
+  };
+
+  const openEligibilityCheck = (scheme: any) => {
+    setActiveScheme(scheme);
+    setEligibilityAnswers([]);
+    setEligibilityResponse(null);
+    setEligibilityError(null);
+    void handleCheckEligibility(scheme);
+  };
+
+  const answerEligibilityQuestion = (answer: "Yes" | "No") => {
+    if (!activeScheme || !eligibilityResponse?.question) return;
+    const answers = [...eligibilityAnswers, { question: eligibilityResponse.question, answer }];
+    setEligibilityAnswers(answers);
+    void handleCheckEligibility(activeScheme, answers);
   };
 
   const categories = ["All", "Income Support", "Crop Insurance", "Credit & Loans", "Mechanization", "Infrastructure", "Solar & Irrigation", "Organic & Soil", "Marketing"];
@@ -784,38 +800,6 @@ function GovernmentSchemes({ profile, notify, language }: { profile: OnboardingP
       </div>
       <SpeakButton label={text(language, "schemes")} />
     </div>
-
-    <section className="scheme-intro" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-      <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-        <Icon name="shield" size={30} />
-        <div>
-          <strong>AI Scheme Advisor (Gemini Powered)</strong>
-          <span>Get personalized assistance for subsidies, land records, and eligibility in your language.</span>
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-        <input
-          placeholder="e.g. What subsidy is available for tractor or cold storage?"
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #ddd' }}
-        />
-        <button className="primary-action" style={{ width: 'auto', padding: '0 16px' }} disabled={advisorLoading} onClick={handleAskAdvisor}>
-          {advisorLoading ? "Thinking..." : "Ask AI Advisor"}
-        </button>
-      </div>
-      {advisorResponse && (
-        <div style={{ marginTop: '12px', padding: '12px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0' }}>
-          <h4>Advisor Response:</h4>
-          <p>{advisorResponse.advice}</p>
-          {advisorResponse.recommendations?.map((r: any, idx: number) => (
-            <div key={idx} style={{ margin: '6px 0', fontSize: '0.9rem' }}>
-              <b>• {r.scheme_title}</b> (Match: {r.eligibility_match}): {r.reason}
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
 
     <div style={{ margin: '16px 0', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
       <label className="search-box" style={{ flex: 1, minWidth: '240px', margin: 0 }}>
@@ -859,6 +843,7 @@ function GovernmentSchemes({ profile, notify, language }: { profile: OnboardingP
                 <button className="scheme-apply" onClick={() => setActiveScheme(scheme)}>
                   View Official Details <Icon name="chevron" size={17} />
                 </button>
+                <button className="scheme-apply" onClick={() => openEligibilityCheck(scheme)}>Can I apply?</button>
                 {scheme.official_link && (
                   <a
                     href={scheme.official_link}
@@ -928,6 +913,29 @@ function GovernmentSchemes({ profile, notify, language }: { profile: OnboardingP
             </a>
           </div>
         )}
+
+        <div style={{ marginTop: '18px', padding: '14px', background: '#eff6ff', borderRadius: '10px', border: '1px solid #bfdbfe' }}>
+          <strong style={{ display: 'block', color: '#1e3a8a', marginBottom: '6px' }}>Can I apply?</strong>
+          <p style={{ margin: '0 0 10px', color: '#334155' }}>Answer a few simple questions based on this scheme&apos;s official eligibility criteria.</p>
+          {eligibilityLoading && <p style={{ margin: 0 }}>Checking the scheme criteria...</p>}
+          {!eligibilityLoading && eligibilityError && <p style={{ margin: 0, color: '#b91c1c' }}>{eligibilityError}</p>}
+          {!eligibilityLoading && eligibilityResponse?.question && (
+            <>
+              <p style={{ fontWeight: 700, color: '#0f172a' }}>{eligibilityResponse.question}</p>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button className="primary-action" onClick={() => answerEligibilityQuestion("Yes")}>Yes</button>
+                <button className="scheme-apply" onClick={() => answerEligibilityQuestion("No")}>No</button>
+              </div>
+            </>
+          )}
+          {!eligibilityLoading && eligibilityResponse?.result && (
+            <div className="eligibility-result">
+              <strong>{eligibilityResponse.result === 'eligible' ? 'You may be eligible to apply.' : eligibilityResponse.result === 'not_eligible' ? 'You may not be eligible to apply.' : 'Eligibility needs verification.'}</strong>
+              <p>{eligibilityResponse.reason}</p>
+              {eligibilityResponse.next_steps?.length > 0 && <small>{eligibilityResponse.next_steps.join(' ')}</small>}
+            </div>
+          )}
+        </div>
       </div>
     )}
   </main>;
