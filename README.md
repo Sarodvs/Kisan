@@ -1,34 +1,47 @@
-An AI-assisted, voice-first digital marketplace and e-service coordination platform designed to bridge the digital and accessibility divide for Indian farmers and rural communities.
 
-Built in 24 hours, Kisan connects small and marginal farmers with local equipment lenders, agricultural laborers, and storage facilities, while enabling seamless interaction with local e-service centers (Common Service Centers / Akshaya centers) and welfare scheme eligibility engines.
+# Kisan Saathi 🎯
 
-🌟 Key Features
-Voice & Vernacular-First Onboarding: Eliminates literacy and technological barriers through localized explainer videos and speech-to-text voice prompts that gather basic farmer profiles without complex text input.
 
-Hyperlocal Equipment & Storage Marketplace (P2P & B2C): An on-demand sharing economy allowing farmers to rent idle tractors, tillers, harvesters, and cold-storage units on a pay-per-use model.
+## Basic Details
+### Team Name: Cooked
 
-AI Government Scheme Eligibility Engine: Analyzes basic parameters (land size, crops, monthly income) to recommend eligible central and state agricultural schemes with clear, step-by-step application guidance.
 
-Dual-Role Operator Dashboard: Provides a streamlined view for local e-service center operators to manage service requests, update application statuses, and track localized rural bookings in real-time.
+### Team Members
+- Team Lead: Sarod V S - GECI
+- Member 2: Karen Aradh - GECI
 
-🛠️ Tech Stack
-Frontend: React (Vite) + TypeScript
+### Project Description
+Kisan Saathi is a smart AI platform for farmers to interact with other farmers, book services like equipment for rent, hiring skilled workers and renting out storage units. It also serves as a bridge between farmers and government provided schemes and programs using an AI advisor to walk them through the application and eligibility criterias.
 
-Styling & Components: Tailwind CSS, shadcn/ui, Lucide Icons
+### The Problem (that doesn't exist)
+A majority of farmers in india lacks education, proper equipments, skilled labour and storage units. They are also unaware of the schemes and programmes that the government provides for indian farmers.
 
-Backend & Database: Supabase (PostgreSQL, Row-Level Security, Realtime Subscriptions)
+### The Solution (that nobody asked for)
+At Kisan Saathi, we’re taking the old-school headache out of farming and turning every farmer’s smartphone into their sharpest tool in the shed tTink of it as a blend of rural WhatsApp, Uber for tractors, and a personal government insider, all rolled into one friendly voice.
 
-API / Connecting Layer: Supabase JavaScript Client (@supabase/supabase-js)
+## Technical Details
+### Technologies/Components Used
+For Software:
+- TypeScript, JavaScript, SQL, HTML, CSS
+- React, Vite, Tailwind CSS, Supabase Edge Functions
+- Supabase JavaScript Client, React DOM, Deno standard library
+- Visual Studio Code, Git/GitHub, npm, Supabase CLI, Vercel, Gemini API
 
-AI Assistance: Gemini API (Scheme eligibility matching and voice parsing)
 
-Deployment: Vercel
+### Implementation
+For Software:
+# Installation
+npm install
 
-## Local setup
+# Run
+npm run dev
 
-1. Copy `.env.example` to `.env.local` and set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from the Supabase project settings.
-2. Apply the SQL migrations in `supabase/migrations` to the project.
-3. In Supabase Dashboard, enable **Authentication > Providers > Phone** and configure an SMS provider. The app sends Indian numbers as `+91XXXXXXXXXX`.
-4. Run `npm install` and `npm run dev`.
 
-The onboarding flow currently uses temporary development verification: any six-digit code is accepted, and Supabase Anonymous Auth creates the backend session. New users are created with role and name metadata, the database trigger creates their profile, and the signup then stores their address, phone, and onboarding answers in `profiles`. Re-enable real phone OTP before production.
+## Team Contributions
+- Sarod: Frontend and some backend
+- Karen: Backend and AI implementations
+
+---
+Made with ❤️ at MuLearn MakeMu
+
+
